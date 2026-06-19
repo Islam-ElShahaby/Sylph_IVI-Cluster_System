@@ -2,7 +2,7 @@
 
 A Qt6/QML in-vehicle infotainment (IVI) system designed for embedded Linux targets. Sylph provides a modern, glass-morphism UI for controlling core vehicle systems.
 
-![Qt](https://img.shields.io/badge/Qt-6.8-41CD52?logo=qt) ![License](https://img.shields.io/badge/license-MIT-blue)
+![Qt](https://img.shields.io/badge/Qt-6.8-41CD52?logo=qt) [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ## Features
 
