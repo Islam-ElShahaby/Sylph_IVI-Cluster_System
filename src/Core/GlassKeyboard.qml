@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Effects
 
 Rectangle {
     id: keyboardRoot
@@ -64,13 +65,26 @@ Rectangle {
 
             Button {
                 Layout.fillWidth: true
-                implicitHeight: 40
-                contentItem: Text {
-                    text: "DEL"
-                    color: keyboardRoot.colorTextPrimary
-                    font.pixelSize: 18
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                implicitHeight: 52
+                focusPolicy: Qt.NoFocus
+                contentItem: Item {
+                    Image {
+                        id: delIcon
+                        anchors.centerIn: parent
+                        width: 24
+                        height: 24
+                        source: "qrc:/Assets/Keyboard/backspace.svg"
+                        sourceSize.width: 48
+                        sourceSize.height: 48
+                        fillMode: Image.PreserveAspectFit
+                        visible: false
+                    }
+                    MultiEffect {
+                        anchors.fill: delIcon
+                        source: delIcon
+                        colorization: 1.0
+                        colorizationColor: keyboardRoot.colorTextPrimary
+                    }
                 }
                 background: Rectangle {
                     color: !keyboardRoot.isNightMode ? Qt.rgba(0.1, 0.08, 0.15, 0.1) : Qt.rgba(0.25, 0.20, 0.32, 0.6)
@@ -93,13 +107,26 @@ Rectangle {
 
             Button {
                 implicitWidth: 60
-                implicitHeight: 40
-                contentItem: Text {
-                    text: "Hide"
-                    color: keyboardRoot.colorTextMuted
-                    font.pixelSize: 15
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                implicitHeight: 52
+                focusPolicy: Qt.NoFocus
+                contentItem: Item {
+                    Image {
+                        id: hideIcon
+                        anchors.centerIn: parent
+                        width: 24
+                        height: 24
+                        source: "qrc:/Assets/Keyboard/keyboard-down.svg"
+                        sourceSize.width: 48
+                        sourceSize.height: 48
+                        fillMode: Image.PreserveAspectFit
+                        visible: false
+                    }
+                    MultiEffect {
+                        anchors.fill: hideIcon
+                        source: hideIcon
+                        colorization: 1.0
+                        colorizationColor: keyboardRoot.colorTextPrimary
+                    }
                 }
                 background: Rectangle {
                     color: !keyboardRoot.isNightMode ? Qt.rgba(0, 0, 0, 0.05) : Qt.rgba(0.2, 0.15, 0.25, 0.4)
@@ -115,7 +142,8 @@ Rectangle {
 
             Button {
                 Layout.fillWidth: true
-                implicitHeight: 40
+                implicitHeight: 52
+                focusPolicy: Qt.NoFocus
                 contentItem: Text {
                     text: "Space"
                     color: keyboardRoot.colorTextPrimary
@@ -138,7 +166,8 @@ Rectangle {
 
             Button {
                 implicitWidth: 80
-                implicitHeight: 40
+                implicitHeight: 52
+                focusPolicy: Qt.NoFocus
                 contentItem: Text {
                     text: "GO"
                     color: !keyboardRoot.isNightMode ? "#ffffff" : keyboardRoot.colorTextPrimary
@@ -164,11 +193,12 @@ Rectangle {
         id: keyboardButtonDelegate
         Button {
             Layout.fillWidth: true
-            implicitHeight: 40
+            implicitHeight: 52
+            focusPolicy: Qt.NoFocus
             contentItem: Text {
                 text: modelData
                 color: keyboardRoot.colorTextPrimary
-                font.pixelSize: 15
+                font.pixelSize: 18
                 font.bold: true
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
@@ -177,6 +207,7 @@ Rectangle {
                 color: !keyboardRoot.isNightMode ? Qt.rgba(0, 0, 0, 0.05) : Qt.rgba(0.2, 0.15, 0.25, 0.4)
                 radius: 8
                 border.color: keyboardRoot.colorStroke
+                border.width: 2
             }
             onClicked: {
                 if (keyboardRoot.targetField) {

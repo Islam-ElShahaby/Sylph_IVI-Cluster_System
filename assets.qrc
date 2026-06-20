@@ -69,5 +69,7 @@
         <file>Assets/Home_climate/person.svg</file>
         <file>Assets/Home_climate/wind.svg</file>
         <file>Assets/Home_climate/up.svg</file>
+        <file>Assets/Keyboard/keyboard-down.svg</file>
+        <file>Assets/Keyboard/backspace.svg</file>
     </qresource>
 </RCC>

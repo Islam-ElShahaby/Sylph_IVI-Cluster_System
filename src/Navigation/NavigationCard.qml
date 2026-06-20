@@ -1027,55 +1027,10 @@ Item {
                     color: colorMapOverlayStroke
                 }
 
-                Button {
-                    id: locateBtn
-                    flat: true
-                    implicitWidth: 32
-                    implicitHeight: 32
-                    background: null
-                    contentItem: Text {
-                        text: "GPS"
-                        font.pixelSize: 18
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    onClicked: {
-                        if (mapLoader.item && root.userLat !== 0.0) {
-                            mapLoader.item.flyTo({
-                                "center": [root.userLat, root.userLng],
-                                "zoom": root.zoomLevel + 13.5,
-                                "bearing": 0.0,
-                                "pitch": root.is3DMode ? 60.0 : 0.0
-                            }, {
-                                "duration": 1500
-                            });
-                        }
-                    }
-                }
-
                 Rectangle {
                     width: 1
                     height: 24
                     color: colorMapOverlayStroke
-                }
-
-                Button {
-                    id: micBtn
-                    flat: true
-                    implicitWidth: 32
-                    implicitHeight: 32
-                    background: null
-                    contentItem: Text {
-                        text: "MIC"
-                        font.pixelSize: 18
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    onClicked: {
-                        if (!root.isVoiceMuted && !AudioFocusManager.isCallInterruptionActive) {
-                            AudioFocusManager.startNavigationPrompt(4000);
-                        }
-                    }
                 }
             }
         }
@@ -1330,7 +1285,7 @@ Item {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             anchors.margins: 18
-            height: searchField.activeFocus ? 230 : 0
+            height: searchField.activeFocus ? 260 : 0
             z: 10
             clip: true
             Behavior on height {

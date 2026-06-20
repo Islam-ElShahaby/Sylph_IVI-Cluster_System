@@ -24,8 +24,8 @@ set(QML_FILES
     src/Radio/RadioCard.qml
     src/Core/CardSwiper.qml
     src/Core/SidebarMenu.qml
+    src/Core/GlassKeyboard.qml
     src/Navigation/NavigationCard.qml
-    src/Navigation/GlassKeyboard.qml
     src/Navigation/MapActionsPanel.qml
     src/Navigation/DirectiveCard.qml
     src/Navigation/TripProgressCard.qml
