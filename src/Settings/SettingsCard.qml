@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Effects
+import QtQuick.Window
 
 // Master-detail Settings screen: a category sidebar on the left and a swapping
 // detail pane on the right -- like a phone / car settings app.
@@ -16,8 +17,16 @@ Item {
     property color colorTextSubtle: typeof mainRoot !== "undefined" ? mainRoot.colorTextSubtle : "#b8b2c8"
     property color colorAccent: typeof mainRoot !== "undefined" ? mainRoot.colorAccent : "#c0b3ff"
     property color colorAccentAlt: typeof mainRoot !== "undefined" ? mainRoot.colorAccentAlt : "#7de2ff"
+    property bool isNightMode: typeof mainRoot !== "undefined" ? mainRoot.isNightMode : true
 
     property int selectedIndex: 0
+
+    // The currently focused text field anywhere in the detail pane, or null.
+    // echoMode only exists on TextInput/TextField, so it filters out non-editors.
+    readonly property Item kbTarget: {
+        var it = root.Window.activeFocusItem
+        return (it && it.echoMode !== undefined) ? it : null
+    }
 
     readonly property var categories: [
         { name: "Wi-Fi" },
@@ -169,6 +178,46 @@ Item {
                 easing.type: Easing.OutQuad
             }
         }
+    }
+
+    // -- Shared virtual keyboard: spans the whole card, drives the focused field --
+    MouseArea {
+        anchors.fill: parent
+        enabled: settingsKeyboard.height > 0
+        visible: settingsKeyboard.height > 0
+        z: 9
+        onClicked: if (root.kbTarget) root.kbTarget.focus = false
+    }
+
+    Rectangle {
+        anchors.fill: settingsKeyboard
+        anchors.margins: -4
+        radius: settingsKeyboard.radius + 2
+        color: "#000000"
+        opacity: root.isNightMode ? 0.35 : 0.08
+        z: settingsKeyboard.z - 1
+        visible: settingsKeyboard.height > 0
+    }
+
+    GlassKeyboard {
+        id: settingsKeyboard
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 20
+        height: root.kbTarget ? 260 : 0
+        z: 10
+        clip: true
+        Behavior on height { NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
+        isNightMode: root.isNightMode
+        targetField: root.kbTarget
+        radiusSmall: root.radiusSmall
+        colorSurface: root.colorSurfaceAlt
+        colorStroke: root.colorStroke
+        colorTextPrimary: root.colorTextPrimary
+        colorTextMuted: root.colorTextSubtle
+        colorAccent: root.colorAccent
+        onSearchTriggered: if (root.kbTarget) root.kbTarget.focus = false
     }
 
     // -- Detail pane components --

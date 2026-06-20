@@ -55,23 +55,17 @@ Item {
             Layout.preferredHeight: 64
             radiusSize: radiusSmall
             colorSurface: colorSurfaceInset
-
-            RowLayout {
-                anchors.fill: parent
-                spacing: 12
-                Text { text: "LOC"; font.pixelSize: 20 }
-                ColumnLayout {
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 2
+                Text { text: "Location"; color: colorTextSubtle; font.pixelSize: 12 }
+                Text {
+                    text: WeatherController.cityName
+                    color: colorTextPrimary
+                    font.pixelSize: 15
+                    font.bold: true
+                    elide: Text.ElideRight
                     Layout.fillWidth: true
-                    spacing: 2
-                    Text { text: "Location"; color: colorTextSubtle; font.pixelSize: 12 }
-                    Text {
-                        text: WeatherController.cityName
-                        color: colorTextPrimary
-                        font.pixelSize: 15
-                        font.bold: true
-                        elide: Text.ElideRight
-                        Layout.fillWidth: true
-                    }
                 }
             }
         }
