@@ -35,13 +35,17 @@ Item {
     property color colorMapTextMuted: isNightMode ? "#eae6f8" : "#322f42"
     property color colorMapTextSubtle: isNightMode ? "#b8b2c8" : "#4a475d"
 
-    property bool mapReloadToggle: true
-
     // Navigation state variables
     property double zoomLevel: 1.5
     property bool isVoiceMuted: false
     property bool is3DMode: true
     property bool isNorthUp: false
+
+    // Camera settings derived from the map toggles. HomeCard's mini map mirrors
+    // these (and activeStyleUrl) so both maps look and behave the same.
+    readonly property real mapBearing: ((is3DMode || !isNorthUp) && !isNaN(vehicleHeading) && vehicleHeading >= 0) ? vehicleHeading : 0.0
+    readonly property real mapZoom: zoomLevel + (is3DMode ? 16.2 : 14.5)
+    readonly property real mapPitch: is3DMode ? 65.0 : 0.0
     property string currentStreet: "System Ready"
     property string nextTurnStreet: "Select Destination"
     property string nextTurnDistance: ""
@@ -52,8 +56,9 @@ Item {
     property real totalRouteDistance: 1.0
     property string searchPlaceholder: "Search coordinates, POIs..."
 
-    property double userLat: 30.0383
-    property double userLng: 31.2102
+    // Default start position: 30°04'17.8"N 31°01'16.6"E
+    property double userLat: 30.0716111
+    property double userLng: 31.0212778
     property double lastLat: 0.0
     property double lastLng: 0.0
     property real vehicleHeading: 0.0
@@ -70,7 +75,14 @@ Item {
     property real demoSegmentProgress: 0.0
 
     property bool mapShouldLoad: false
-    property string searchSessionToken: ""
+
+    // Online-first with offline fallback. usingOnlineMap/usingOnlineSearch report
+    // which backend actually served the last request -- handy for a status pill.
+    property bool usingOnlineMap: false
+    property bool usingOnlineSearch: false
+    // Keep online attempts short so a dead link doesn't stall the UI before the
+    // local fallback kicks in.
+    readonly property int onlineTimeoutMs: 4000
 
     Timer {
         id: searchDebounceTimer
@@ -209,20 +221,13 @@ Item {
         if (!mapLoader.item)
             return;
 
-        var bearingVal = 0.0;
-        if ((root.is3DMode || !root.isNorthUp) && !isNaN(root.vehicleHeading) && root.vehicleHeading >= 0) {
-            bearingVal = root.vehicleHeading;
-        }
-
+        var bearingVal = root.mapBearing;
         var lat = root.userLat;
         var lng = root.userLng;
-        var zoomVal = root.zoomLevel + 14.5;
-        var pitchVal = 0.0;
+        var zoomVal = root.mapZoom;
+        var pitchVal = root.mapPitch;
 
         if (root.is3DMode) {
-            zoomVal = root.zoomLevel + 16.2;
-            pitchVal = 65.0;
-
             // Shift coordinate slightly forward based on vehicle heading
             // This aligns perfectly with the marker offset of 0.18 * height
             var bearingRad = bearingVal * Math.PI / 180;
@@ -249,78 +254,101 @@ Item {
     function rewriteMapboxUrls(styleObj, apiKey) {
         var suffix = "?access_token=" + apiKey;
 
-        // Sprite: mapbox://sprites/mapbox/navigation-night-v1
-        //      -> https://api.mapbox.com/styles/v1/mapbox/navigation-night-v1/sprite?access_token=...
         if (typeof styleObj.sprite === "string" && styleObj.sprite.indexOf("mapbox://sprites/") === 0) {
             var spritePath = styleObj.sprite.replace("mapbox://sprites/", "");
             styleObj.sprite = "https://api.mapbox.com/styles/v1/" + spritePath + "/sprite" + suffix;
         }
 
-        // Glyphs: mapbox://fonts/mapbox/{fontstack}/{range}.pbf
-        //      -> https://api.mapbox.com/fonts/v1/mapbox/{fontstack}/{range}.pbf?access_token=...
         if (typeof styleObj.glyphs === "string" && styleObj.glyphs.indexOf("mapbox://fonts/") === 0) {
             styleObj.glyphs = styleObj.glyphs.replace("mapbox://fonts/", "https://api.mapbox.com/fonts/v1/") + suffix;
         }
 
-        // Sources: rewrite mapbox:// tile source URLs
         var sourceKeys = Object.keys(styleObj.sources);
         for (var i = 0; i < sourceKeys.length; i++) {
             var src = styleObj.sources[sourceKeys[i]];
 
-            // Source with a "url" field like "mapbox://mapbox.mapbox-streets-v8"
             if (typeof src.url === "string" && src.url.indexOf("mapbox://") === 0) {
-                var tilesetIds = src.url.replace("mapbox://", "");
-                // Convert to TileJSON endpoint
-                src.url = "https://api.mapbox.com/v4/" + tilesetIds + ".json" + suffix;
+                src.url = "https://api.mapbox.com/v4/" + src.url.replace("mapbox://", "") + ".json" + suffix;
             }
 
-            // Source with "tiles" array entries like "mapbox://tiles/..."
             if (Array.isArray(src.tiles)) {
                 for (var t = 0; t < src.tiles.length; t++) {
                     if (typeof src.tiles[t] === "string" && src.tiles[t].indexOf("mapbox://") === 0) {
-                        var tilePath = src.tiles[t].replace("mapbox://tiles/", "");
-                        src.tiles[t] = "https://api.mapbox.com/v4/" + tilePath + suffix;
+                        src.tiles[t] = "https://api.mapbox.com/v4/" + src.tiles[t].replace("mapbox://tiles/", "") + suffix;
                     }
                 }
             }
         }
     }
 
+    // Publish a finished style object to the map. Assigning activeStyleUrl restyles
+    // the live map in place (MapQuickItem.setStyle -> Map::setStyleUrl), so switching
+    // between the online and offline basemap never tears the map down mid-drive.
+    function applyBaseStyle(styleObj) {
+        baseStyleObj = styleObj;
+        inject3DBuildings(baseStyleObj);
+        if (currentRouteGeometry) {
+            injectRouteLayer(currentRouteGeometry);
+        } else {
+            root.activeStyleUrl = "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify(baseStyleObj));
+        }
+    }
+
+    // Online Mapbox first (richer cartography), local Protomaps as the fallback.
     function loadBaseStyle() {
         var apiKey = AppConfig.mapApiKey;
-        var styleName = root.isNightMode ? "navigation-night-v1" : "navigation-day-v1";
+        if (!apiKey) {
+            loadLocalStyle("no map API key");
+            return;
+        }
 
-        // 1. Upgrade to Mapbox's Premium Navigation Style
+        var styleName = root.isNightMode ? "navigation-night-v1" : "navigation-day-v1";
         var url = "https://api.mapbox.com/styles/v1/mapbox/" + styleName + "?access_token=" + apiKey;
 
-        console.log("[Navigation] Loading Style:", url); // Debug
+        var xhr = new XMLHttpRequest();
+        xhr.timeout = root.onlineTimeoutMs;
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return;
+            if (xhr.status === 200) {
+                try {
+                    var styleObj = JSON.parse(xhr.responseText);
+                    rewriteMapboxUrls(styleObj, apiKey);
+                    root.usingOnlineMap = true;
+                    applyBaseStyle(styleObj);
+                    return;
+                } catch (e) {
+                    console.log("[Navigation] Mapbox style parse exception:", e);
+                }
+            }
+            loadLocalStyle("Mapbox HTTP " + xhr.status);
+        };
+        xhr.ontimeout = function () { loadLocalStyle("Mapbox timed out"); };
+        xhr.open("GET", url, true);
+        xhr.send();
+    }
+
+    // Local Protomaps style -- see tools/build-offline-data.sh. It points at
+    // pmtiles://file:// tiles plus file:// glyphs and sprites, so it needs no network.
+    function loadLocalStyle(reason) {
+        console.log("[Navigation] Using offline basemap (" + reason + ")");
+        var url = "file://" + AppConfig.mapDir + (root.isNightMode ? "/style-dark.json" : "/style-light.json");
 
         var xhr = new XMLHttpRequest();
         xhr.onreadystatechange = function () {
-            if (xhr.readyState === XMLHttpRequest.DONE) {
-                if (xhr.status === 200) {
-                    try {
-                        baseStyleObj = JSON.parse(xhr.responseText);
-                        rewriteMapboxUrls(baseStyleObj, apiKey);
-                        inject3DBuildings(baseStyleObj);
-
-                        root.activeStyleUrl = "";
-                        var hasRoute = !!currentRouteGeometry;
-                        Qt.callLater(function () {
-                            if (hasRoute) {
-                                injectRouteLayer(currentRouteGeometry);
-                            } else {
-                                root.activeStyleUrl = "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify(baseStyleObj));
-                            }
-                            root.mapReloadToggle = true;
-                        });
-                        return;
-                    } catch (e) {
-                        console.log("[Navigation] Style parse exception:", e);
-                    }
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return;
+            // file:// replies commonly report status 0 rather than 200
+            if (xhr.status === 200 || xhr.status === 0) {
+                try {
+                    root.usingOnlineMap = false;
+                    applyBaseStyle(JSON.parse(xhr.responseText));
+                    return;
+                } catch (e) {
+                    console.log("[Navigation] Offline style parse exception:", e);
                 }
-                root.activeStyleUrl = "";
-                root.mapReloadToggle = true;
+            } else {
+                console.log("[Navigation] Offline style load failed:", url, "HTTP", xhr.status);
             }
         };
         xhr.open("GET", url, true);
@@ -328,12 +356,23 @@ Item {
     }
 
     function inject3DBuildings(styleObj) {
-        // Hide existing 2D building layers to prevent overlap with our 3D extrusions
+        // Hide existing 2D building layers to prevent overlap with our 3D extrusions,
+        // and scavenge the source they came from on the way past. Protomaps calls it
+        // protomaps/buildings, Mapbox calls it composite/building -- one pass covers both.
+        var sourceId = "composite";
+        var sourceLayer = "building";
+        var found = false;
         for (var i = 0; i < styleObj.layers.length; i++) {
-            if (styleObj.layers[i].id.indexOf("building") !== -1) {
-                styleObj.layers[i].layout = styleObj.layers[i].layout || {};
-                styleObj.layers[i].layout.visibility = "none";
+            var L = styleObj.layers[i];
+            if (L.id.indexOf("building") === -1)
+                continue;
+            if (!found && L.type === "fill" && L.source) {
+                sourceId = L.source;
+                sourceLayer = L["source-layer"] || sourceLayer;
+                found = true;
             }
+            L.layout = L.layout || {};
+            L.layout.visibility = "none";
         }
 
         // Global directional lighting for realistic wall/roof shading
@@ -344,13 +383,8 @@ Item {
             "position": [1.15, 210, 30]
         };
 
-        // Determine the best available vector source that contains a "building" layer.
-        // Mapbox navigation styles already include a "composite" source with buildings data --
-        // reuse it instead of injecting a duplicate tile source.
-        var sourceId = "composite";
-        var sourceLayer = "building";
-        if (!styleObj.sources[sourceId]) {
-            // Fallback: find any vector source
+        // Last resort if no building layer was found above: any vector source.
+        if (!found && !styleObj.sources[sourceId]) {
             var keys = Object.keys(styleObj.sources);
             for (var k = 0; k < keys.length; k++) {
                 if (styleObj.sources[keys[k]].type === "vector") {
@@ -465,25 +499,36 @@ Item {
 
         styleCopy.layers.splice(insertIndex, 0, routeGlow, routeLayer);
 
-        var newStyleUrl = "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify(styleCopy));
-
-        // FIX 3: Actually force the MapLibre Loader to recreate the map instance
-        if (root.activeStyleUrl !== newStyleUrl) {
-            root.activeStyleUrl = newStyleUrl;
-            root.mapReloadToggle = false;
-            Qt.callLater(function () {
-                root.mapReloadToggle = true;
-            });
-        }
+        // MapQuickItem.setStyle forwards to Map::setStyleUrl, so assigning this
+        // restyles the live map -- no Loader teardown, no GL context churn.
+        root.activeStyleUrl = "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify(styleCopy));
     }
 
+    // Local OSRM first -- it is instant and works with no signal. The public
+    // server is the fallback, which also covers destinations outside the region
+    // the local graph was built for.
     function fetchRoute(startLat, startLng, endLat, endLng, label) {
-        var xhr = new XMLHttpRequest();
-        var url = "https://router.project-osrm.org/route/v1/driving/" + startLng + "," + startLat + ";" + endLng + "," + endLat + "?overview=full&geometries=geojson";
-
         searchPlaceholder = "Calculating route...";
         demoDriveTimer.stop();
+        requestRoute(AppConfig.osrmUrl, startLat, startLng, endLat, endLng, label, true);
+    }
 
+    function requestRoute(base, startLat, startLng, endLat, endLng, label, canFallBack) {
+        var xhr = new XMLHttpRequest();
+        var url = base + "/route/v1/driving/" + startLng + "," + startLat + ";" + endLng + "," + endLat + "?overview=full&geometries=geojson";
+
+        function fallback(reason) {
+            if (canFallBack && AppConfig.osrmFallbackUrl) {
+                console.log("[Navigation] Local routing failed (" + reason + "), trying " + AppConfig.osrmFallbackUrl);
+                requestRoute(AppConfig.osrmFallbackUrl, startLat, startLng, endLat, endLng, label, false);
+            } else {
+                searchPlaceholder = "Routing service offline";
+            }
+        }
+
+        if (!canFallBack)
+            xhr.timeout = root.onlineTimeoutMs;
+        xhr.ontimeout = function () { fallback("timed out"); };
         xhr.onreadystatechange = function () {
             if (xhr.readyState === XMLHttpRequest.DONE) {
                 if (xhr.status === 200) {
@@ -531,13 +576,13 @@ Item {
                                 demoDriveTimer.restart();
                             }
                         } else {
-                            searchPlaceholder = "No route found!";
+                            fallback("no route in response");
                         }
                     } catch (e) {
-                        searchPlaceholder = "Routing JSON error";
+                        fallback("JSON error");
                     }
                 } else {
-                    searchPlaceholder = "Routing service offline";
+                    fallback("HTTP " + xhr.status);
                 }
             }
         };
@@ -545,118 +590,173 @@ Item {
         xhr.send();
     }
 
-    function generateSessionToken() {
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-            var r = Math.random() * 16 | 0;
-            var v = c === 'x' ? r : (r & 0x3 | 0x8);
-            return v.toString(16);
-        });
-    }
-
+    // Google Places first (better POI coverage), local Photon as the fallback.
     function fetchSuggestions(query) {
+        searchPlaceholder = "Searching...";
+
         var googleKey = AppConfig.googleApiKey;
         if (!googleKey) {
-            searchPlaceholder = "Google API Key Missing";
+            fetchSuggestionsOffline(query, "no Google API key");
             return;
         }
 
-        searchPlaceholder = "Searching...";
-
-        // Added `origin` parameter to force Google to calculate distance_meters
+        // `origin` makes Google return distance_meters
         var url = "https://maps.googleapis.com/maps/api/place/autocomplete/json" + "?input=" + encodeURIComponent(query) + "&location=" + root.userLat + "," + root.userLng + "&origin=" + root.userLat + "," + root.userLng + "&radius=50000" + "&key=" + googleKey;
 
-        console.log("[Navigation] Google Search URL:", url);
         var xhr = new XMLHttpRequest();
-
+        xhr.timeout = root.onlineTimeoutMs;
         xhr.onreadystatechange = function () {
-            if (xhr.readyState === XMLHttpRequest.DONE) {
-                if (xhr.status === 200) {
-                    try {
-                        var response = JSON.parse(xhr.responseText);
-                        searchResultsModel.clear();
-
-                        if (response.status === "OK" && response.predictions) {
-                            var predictions = response.predictions;
-                            for (var i = 0; i < predictions.length; i++) {
-                                var pred = predictions[i];
-
-                                // Format Google's returned distance
-                                var distText = "";
-                                if (pred.distance_meters !== undefined) {
-                                    var dKm = pred.distance_meters / 1000.0;
-                                    distText = (dKm < 1.0) ? Math.round(pred.distance_meters) + " m" : dKm.toFixed(1) + " km";
-                                }
-
-                                searchResultsModel.append({
-                                    "placeName": pred.structured_formatting.main_text,
-                                    "placeContext": pred.structured_formatting.secondary_text || "",
-                                    "placeDistance": distText,
-                                    "mapboxId": pred.place_id
-                                });
-                            }
-                            searchPlaceholder = "Select a destination";
-                        } else if (response.status === "ZERO_RESULTS") {
-                            searchPlaceholder = "No results found";
-                        } else {
-                            console.log("[Navigation] Google API Error:", response.status);
-                            searchPlaceholder = "API Error: " + response.status;
-                        }
-                    } catch (e) {
-                        console.log("[Navigation] Search parse error:", e);
-                        searchPlaceholder = "Search error";
-                    }
-                } else {
-                    console.log("[Navigation] Search failed:", xhr.status, xhr.responseText);
-                    searchPlaceholder = "Search failed (HTTP " + xhr.status + ")";
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return;
+            if (xhr.status !== 200) {
+                fetchSuggestionsOffline(query, "Google HTTP " + xhr.status);
+                return;
+            }
+            try {
+                var response = JSON.parse(xhr.responseText);
+                if (response.status !== "OK" && response.status !== "ZERO_RESULTS") {
+                    fetchSuggestionsOffline(query, "Google " + response.status);
+                    return;
                 }
+
+                searchResultsModel.clear();
+                var predictions = response.predictions || [];
+                for (var i = 0; i < predictions.length; i++) {
+                    var pred = predictions[i];
+                    var distText = "";
+                    if (pred.distance_meters !== undefined) {
+                        var dKm = pred.distance_meters / 1000.0;
+                        distText = (dKm < 1.0) ? Math.round(pred.distance_meters) + " m" : dKm.toFixed(1) + " km";
+                    }
+                    searchResultsModel.append({
+                        "placeName": pred.structured_formatting.main_text,
+                        "placeContext": pred.structured_formatting.secondary_text || "",
+                        "placeDistance": distText,
+                        // Google needs a second lookup for coordinates; Photon does not.
+                        "placeId": pred.place_id,
+                        "placeLat": 0.0,
+                        "placeLon": 0.0
+                    });
+                }
+                root.usingOnlineSearch = true;
+                searchPlaceholder = predictions.length > 0 ? "Select a destination" : "No results found";
+            } catch (e) {
+                fetchSuggestionsOffline(query, "Google parse error");
+            }
+        };
+        xhr.ontimeout = function () { fetchSuggestionsOffline(query, "Google timed out"); };
+        xhr.open("GET", url, true);
+        xhr.send();
+    }
+
+    // Offline geocoding via a local Photon instance. Unlike Google's autocomplete,
+    // Photon returns coordinates with each hit, so there is no second "details"
+    // round trip -- selecting a result routes straight away.
+    function fetchSuggestionsOffline(query, reason) {
+        console.log("[Navigation] Using offline search (" + reason + ")");
+        root.usingOnlineSearch = false;
+
+        var url = AppConfig.geocoderUrl + "/api?q=" + encodeURIComponent(query) + "&lat=" + root.userLat + "&lon=" + root.userLng + "&limit=8";
+
+        var xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return;
+
+            if (xhr.status !== 200) {
+                console.log("[Navigation] Search failed:", xhr.status);
+                searchPlaceholder = "Search service offline";
+                return;
+            }
+
+            try {
+                var features = JSON.parse(xhr.responseText).features || [];
+                searchResultsModel.clear();
+
+                for (var i = 0; i < features.length; i++) {
+                    var f = features[i];
+                    var p = f.properties || {};
+                    var lon = f.geometry.coordinates[0];
+                    var lat = f.geometry.coordinates[1];
+
+                    var name = p.name || (p.housenumber && p.street ? p.housenumber + " " + p.street : p.street) || p.city || "Unnamed";
+                    var context = [p.street !== name ? p.street : "", p.city, p.state].filter(function (s) {
+                        return !!s;
+                    }).join(", ");
+
+                    // Photon has no distance field -- measure it ourselves.
+                    var d = root.distanceBetween(root.userLat, root.userLng, lat, lon);
+                    var distText = (d < 1.0) ? Math.round(d * 1000) + " m" : d.toFixed(1) + " km";
+
+                    // Same role set as the Google path -- ListModel fixes its roles
+                    // on first insert and clear() does not reset them.
+                    searchResultsModel.append({
+                        "placeName": name,
+                        "placeContext": context,
+                        "placeDistance": distText,
+                        "placeId": "",
+                        "placeLat": lat,
+                        "placeLon": lon
+                    });
+                }
+                searchPlaceholder = features.length > 0 ? "Select a destination" : "No results found";
+            } catch (e) {
+                console.log("[Navigation] Search parse error:", e);
+                searchPlaceholder = "Search error";
             }
         };
         xhr.open("GET", url, true);
         xhr.send();
     }
 
-    function retrieveLocationAndRoute(placeId, placeName) {
-        var googleKey = AppConfig.googleApiKey;
-        if (!googleKey)
+    function selectResult(entry) {
+        // Photon hands back coordinates with the suggestion; Google only gives a
+        // place_id, so that path needs one more lookup before we can route.
+        if (entry.placeId) {
+            retrieveLocationAndRoute(entry.placeId, entry.placeName);
             return;
+        }
+        root.fetchRoute(root.userLat, root.userLng, entry.placeLat, entry.placeLon, entry.placeName);
+        clearSearch();
+    }
 
+    function clearSearch() {
+        searchResultsModel.clear();
+        searchField.focus = false;
+        searchField.text = "";
+    }
+
+    // Google-only second step: resolve a place_id to coordinates, then route.
+    function retrieveLocationAndRoute(placeId, placeName) {
         searchPlaceholder = "Calculating route...";
 
-        // We only request the "geometry" field to save bandwidth and API costs
-        var url = "https://maps.googleapis.com/maps/api/place/details/json" + "?place_id=" + placeId + "&fields=geometry" + "&key=" + googleKey;
+        // Only the geometry field, to keep the response (and the bill) small
+        var url = "https://maps.googleapis.com/maps/api/place/details/json" + "?place_id=" + placeId + "&fields=geometry" + "&key=" + AppConfig.googleApiKey;
 
-        console.log("[Navigation] Google Retrieve URL:", url);
         var xhr = new XMLHttpRequest();
-
+        xhr.timeout = root.onlineTimeoutMs;
         xhr.onreadystatechange = function () {
-            if (xhr.readyState === XMLHttpRequest.DONE) {
-                if (xhr.status === 200) {
-                    try {
-                        var response = JSON.parse(xhr.responseText);
-
-                        if (response.status === "OK" && response.result.geometry) {
-                            var loc = response.result.geometry.location;
-
-                            // Hand off the Google coordinates to your existing routing logic!
-                            // Google returns {lat: ..., lng: ...}
-                            root.fetchRoute(root.userLat, root.userLng, loc.lat, loc.lng, placeName);
-
-                            searchResultsModel.clear();
-                            searchField.focus = false;
-                            searchField.text = "";
-                        } else {
-                            searchPlaceholder = "Location details not found";
-                        }
-                    } catch (e) {
-                        console.log("[Navigation] Retrieve parse error:", e);
-                        searchPlaceholder = "Routing error";
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return;
+            if (xhr.status === 200) {
+                try {
+                    var response = JSON.parse(xhr.responseText);
+                    if (response.status === "OK" && response.result.geometry) {
+                        var loc = response.result.geometry.location;
+                        root.fetchRoute(root.userLat, root.userLng, loc.lat, loc.lng, placeName);
+                        clearSearch();
+                        return;
                     }
-                } else {
-                    console.log("[Navigation] Retrieve failed:", xhr.status, xhr.responseText);
-                    searchPlaceholder = "Retrieve failed (HTTP " + xhr.status + ")";
+                } catch (e) {
+                    console.log("[Navigation] Retrieve parse error:", e);
                 }
             }
+            // No coordinates means no route -- fall back to the offline geocoder,
+            // which returns coordinates inline.
+            console.log("[Navigation] Place details failed, retrying via offline search");
+            fetchSuggestionsOffline(placeName, "Google place details failed");
         };
+        xhr.ontimeout = function () { fetchSuggestionsOffline(placeName, "Google place details timed out"); };
         xhr.open("GET", url, true);
         xhr.send();
     }
@@ -733,14 +833,16 @@ Item {
         Component {
             id: mapLibreComponent
             MapLibre {
-                // Initial style is always driven by loadBaseStyle() which rewrites mapbox:// URLs.
-                // Use a minimal empty style as a placeholder until the XHR completes.
-                style: root.activeStyleUrl !== "" ? root.activeStyleUrl : "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify({
-                    "version": 8,
-                    "name": "empty",
-                    "sources": {},
-                    "layers": []
-                }))
+                // Initial camera: the map reads these on GL init, so the first frame is
+                // already at the user's position instead of the default world view.
+                // (An easeTo issued before init races the renderer and gets dropped.)
+                coordinate: [root.userLat, root.userLng]
+                zoomLevel: root.mapZoom
+
+                // The Loader only activates once this is non-empty, so the map is never
+                // built with a placeholder. Later changes restyle in place via
+                // MapQuickItem.setStyle -> Map::setStyleUrl.
+                style: root.activeStyleUrl
             }
         }
 
@@ -751,7 +853,7 @@ Item {
             Loader {
                 id: mapLoader
                 anchors.fill: parent
-                active: root.mapShouldLoad && root.mapReloadToggle
+                active: root.mapShouldLoad && root.activeStyleUrl !== ""
                 sourceComponent: mapLibreComponent
                 onLoaded: root.updateMapCamera(0)
                 visible: false // Hidden because the OpacityMask will render it
@@ -1013,8 +1115,7 @@ Item {
                     onAccepted: {
                         searchDebounceTimer.stop();
                         if (searchResultsModel.count > 0) {
-                            var first = searchResultsModel.get(0);
-                            root.retrieveLocationAndRoute(first.mapboxId, first.placeName);
+                            root.selectResult(searchResultsModel.get(0));
                         } else {
                             focus = false;
                         }
@@ -1216,7 +1317,7 @@ Item {
                             id: mouseArea
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.retrieveLocationAndRoute(model.mapboxId, model.placeName)
+                            onClicked: root.selectResult(model)
                         }
                     }
                     Rectangle {

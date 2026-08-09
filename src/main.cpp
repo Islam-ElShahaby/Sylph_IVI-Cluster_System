@@ -13,11 +13,14 @@
 #include "Weather/AtmosBackend.h"
 #include "Core/VehicleController.h"
 #include "Core/DoorUartReader.h"
+#include "Can/CanController.h"
 
 int main(int argc, char *argv[])
 {
     // Force OpenGL graphics API for RHI backend to ensure compatibility with MapLibre Native QT
     qputenv("QSG_RHI_BACKEND", "opengl");
+    // NavigationCard loads the offline map style over file://, which Qt gates by default
+    qputenv("QML_XHR_ALLOW_FILE_READ", "1");
 
     QApplication app(argc, argv);
     // Needed for QSettings (weather location/units persistence)
@@ -37,6 +40,11 @@ int main(int argc, char *argv[])
     AtmosBackend *weatherController = new AtmosBackend(&app);
     VehicleController *vehicleController = new VehicleController(&app);
     new DoorUartReader(vehicleController, QStringLiteral("/dev/ttyAMA0"), 115200, &app);
+    const int canPort = qEnvironmentVariableIntValue("SYLPH_CAN_PORT");
+    CanController *canController = new CanController(
+        qEnvironmentVariable("SYLPH_CAN_HOST", QStringLiteral("10.42.0.65")),
+        static_cast<quint16>(canPort > 0 ? canPort : 5555),
+        &app);
 
     // Register it as a QML Singleton
     qmlRegisterSingletonInstance("Sylph.Bluetooth", 1, 0, "BtController", controller);
@@ -50,9 +58,13 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Sylph.Settings", 1, 0, "AudioSettingsController", audioSettingsController);
     qmlRegisterSingletonInstance("Sylph.Weather", 1, 0, "WeatherController", weatherController);
     qmlRegisterSingletonInstance("Sylph.Core",    1, 0, "VehicleController", vehicleController);
+    qmlRegisterSingletonInstance("Sylph.Can",     1, 0, "CanController", canController);
 
     QQmlApplicationEngine engine;
-    engine.addImportPath("/usr/local/qml");
+    // No addImportPath for /usr/local/qml: a stale MapLibre plugin lives there and
+    // addImportPath prepends, so it would shadow the one in the Qt prefix. The
+    // MapQuickItem metaobject is file-local to whichever plugin loads, so the stale
+    // copy silently defines the QML property set.
 
     QObject::connect(
         &engine,

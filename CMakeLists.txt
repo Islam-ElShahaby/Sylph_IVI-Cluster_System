@@ -49,6 +49,7 @@ set(QML_FILES
     src/Climate/HvacflowButton.qml
     src/Climate/FanSpeedArc.qml
     src/Core/DoorStatusPopup.qml
+    src/Seat/SeatCard.qml
 )
 
 foreach(qml_file IN LISTS QML_FILES)
@@ -87,6 +88,8 @@ qt_add_qml_module(appSylph
         src/Settings/AudioSettingsController.cpp
         src/Weather/AtmosBackend.h
         src/Weather/AtmosBackend.cpp
+        src/Can/CanController.h
+        src/Can/CanController.cpp
 
     RESOURCES
         assets.qrc

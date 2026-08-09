@@ -136,42 +136,40 @@ Item {
         MouseArea { id: tileMa; anchors.fill: parent; onClicked: tile.activated() }
     }
 
-    // -- Mini map style -- switches between CARTO dark/light based on theme --
-    property string miniNavMapStyle: {
-        var variant = isNightMode ? "dark_all" : "light_all"
-        return "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify({
-            "version": 8,
-            "sources": {
-                "carto-tiles": {
-                    "type": "raster",
-                    "tiles": [
-                        "https://a.basemaps.cartocdn.com/" + variant + "/{z}/{x}/{y}@2x.png",
-                        "https://b.basemaps.cartocdn.com/" + variant + "/{z}/{x}/{y}@2x.png",
-                        "https://c.basemaps.cartocdn.com/" + variant + "/{z}/{x}/{y}@2x.png"
-                    ],
-                    "tileSize": 256,
-                    "attribution": "© OpenStreetMap © CARTO"
-                }
-            },
-            "layers": [{"id": "carto-layer", "type": "raster", "source": "carto-tiles"}]
-        }))
+    // -- Mini map -- mirrors the Navigation tab's map (style, position, 3D/north-up) --
+    // Wired to the NavigationCard instance in Main.qml.
+    property QtObject navCard: null
+
+    // Mirrors whatever style Navigation currently has. MapQuickItem.setStyle now
+    // forwards to Map::setStyleUrl, so this restyles the live map -- no rebuild,
+    // which is what used to SIGSEGV in QMapLibre's destructor.
+    property string miniNavMapStyle: ""
+    property bool miniMapReady: false
+
+    function syncMiniCamera(duration) {
+        // Skip while the Home tab is hidden -- Navigation drives its own map, and
+        // the demo/GPS feed ticks at 10 Hz.
+        if (!miniMapLoader.item || !navCard || !root.visible) return
+        miniMapLoader.item.easeTo({
+            "center":  [navCard.userLat, navCard.userLng],
+            "zoom":    navCard.mapZoom,
+            "bearing": navCard.mapBearing,
+            "pitch":   navCard.mapPitch
+        }, {"duration": duration})
     }
 
-    onIsNightModeChanged: {
-        if (miniMapLoader.item) {
-            var lat = BtGpsController.active ? BtGpsController.latitude  : 30.0383
-            var lng = BtGpsController.active ? BtGpsController.longitude : 31.2102
-            var hdg = (BtGpsController.active && BtGpsController.heading >= 0) ? BtGpsController.heading : 0
-            Qt.callLater(function() {
-                miniMapLoader.item.easeTo({"center": [lat, lng], "zoom": 14.5, "bearing": hdg, "pitch": 40.0}, {"duration": 0})
-            })
-        }
-    }
+    onVisibleChanged: if (visible) syncMiniCamera(0)
 
     Component {
         id: miniMapComponent
         MapLibre {
             style: root.miniNavMapStyle
+            // Initial camera -- must NOT depend on BtGpsController, whose
+            // active/latitude can momentarily report NaN at startup and push an
+            // invalid coordinate that blanks the renderer. NavigationCard's
+            // userLat/userLng always hold a valid last-known position.
+            coordinate: root.navCard ? [root.navCard.userLat, root.navCard.userLng] : [30.0383, 31.2102]
+            zoomLevel: root.navCard ? root.navCard.mapZoom : 14.5
         }
     }
 
@@ -214,17 +212,17 @@ Item {
                     Loader {
                         id: miniMapLoader
                         anchors.fill: parent
-                        active: true     // must stay alive -- OpacityMask holds a source reference;
-                                         // destroying the item while the mask still points to it causes a SIGSEGV
+                        // Defer creation one tick: if the MapQuickItem is built during the
+                        // initial QML load (before the window's GL context exists) its
+                        // renderer never produces a frame and the map stays blank/white.
+                        // ...and until Navigation has a style to hand over, so the map
+                        // is built exactly once, with the right style.
+                        active: root.miniMapReady && root.miniNavMapStyle !== ""
+                        Component.onCompleted: Qt.callLater(function() { root.miniMapReady = true })
                         sourceComponent: miniMapComponent
-                        visible: false   // rendered through the OpacityMask below
+                        visible: false
 
-                        onLoaded: {
-                            var lat = BtGpsController.active ? BtGpsController.latitude  : 30.0383
-                            var lng = BtGpsController.active ? BtGpsController.longitude : 31.2102
-                            var hdg = (BtGpsController.active && BtGpsController.heading >= 0) ? BtGpsController.heading : 0
-                            item.easeTo({"center": [lat, lng], "zoom": 14.5, "bearing": hdg, "pitch": 40.0}, {"duration": 0})
-                        }
+                        onLoaded: root.syncMiniCamera(0)
                     }
 
                     Rectangle {
@@ -238,6 +236,7 @@ Item {
                         anchors.fill: parent
                         source: miniMapLoader
                         maskSource: miniMapMask
+                        visible: true
                     }
                 }
 
@@ -315,19 +314,19 @@ Item {
                 }
 
 
-                // Update map camera when GPS position changes
+                // Follow the Navigation map: style, position/heading, and the 3D &
+                // north-up toggles
                 Connections {
-                    target: BtGpsController
-                    function onPositionChanged() {
-                        if (miniMapLoader.item && BtGpsController.active) {
-                            miniMapLoader.item.easeTo({
-                                "center":  [BtGpsController.latitude, BtGpsController.longitude],
-                                "zoom":    14.5,
-                                "bearing": BtGpsController.heading >= 0 ? BtGpsController.heading : 0,
-                                "pitch":   40.0
-                            }, {"duration": 1000})
-                        }
+                    target: root.navCard
+                    function onActiveStyleUrlChanged() {
+                        // Never propagate an empty style: miniMapLoader.active is bound to
+                        // miniNavMapStyle, so an empty value would destroy the map item.
+                        if (root.navCard.activeStyleUrl !== "")
+                            root.miniNavMapStyle = root.navCard.activeStyleUrl
                     }
+                    function onUserLatChanged() { root.syncMiniCamera(500) }
+                    function onMapZoomChanged() { root.syncMiniCamera(300) }
+                    function onMapBearingChanged() { root.syncMiniCamera(300) }
                 }
             }
 

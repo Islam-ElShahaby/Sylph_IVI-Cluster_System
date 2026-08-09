@@ -11,13 +11,14 @@ import Sylph.Wifi 1.0
 import Sylph.LocalMedia 1.0
 import Sylph.Core 1.0
 import Sylph.Weather 1.0
+import Sylph.Can 1.0
 
 ApplicationWindow {
     id: mainRoot
     width: 1024
     height: 600
     visible: true
-    title: "Sylph"
+    flags: Qt.Window | Qt.FramelessWindowHint
     color: isNightMode ? "#15141a" : "#f5f4fa"
 
     property bool isNightMode: computeNight()
@@ -300,6 +301,8 @@ ApplicationWindow {
             // Keep the tiles clear of the full-width climate bar at the bottom
             bottomReserve: Math.max(0, homeClimateBar.height - 24 + baseMargin)
             currentMediaTabIndex: mediaSwiper.currentIndex
+            // Mini map mirrors the Navigation tab's map style + camera settings
+            navCard: navigationCard
             onRequestTab: index => { sidebarMenu.currentIndex = index }
         }
 
@@ -376,6 +379,38 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: sidebarMenu.currentIndex === 6
+        }
+
+        SeatCard {
+            id: seatCard
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: sidebarMenu.currentIndex === 7
+        }
+    }
+
+    // -- CAN telemetry: fan speed + seat tilt, 50 ms heartbeat and on change ----
+    // Both cards stay instantiated while hidden, so this tracks them regardless
+    // of which page is showing. sendFrame() is a no-op while the link is down.
+    // ponytail: IDs are placeholders -- swap for the real ones from the DBC.
+    Item {
+        id: canTelemetry
+        readonly property int fanSpeed: climateCard.fanSpeed   // 0-6
+        readonly property int seatTilt: seatCard.tilt          // 0-45 degrees
+
+        function transmit() {
+            CanController.sendFrame(0x310, [fanSpeed])
+            CanController.sendFrame(0x311, [seatTilt])
+        }
+
+        onFanSpeedChanged: transmit()
+        onSeatTiltChanged: transmit()
+
+        Timer {
+            interval: 50
+            repeat: true
+            running: true
+            onTriggered: canTelemetry.transmit()
         }
     }
 
@@ -580,7 +615,7 @@ ApplicationWindow {
             anchors.left: parent.left
             anchors.leftMargin: 20
             anchors.verticalCenter: parent.verticalCenter
-            text: ["Home", "Navigation", "Media", "Phone", "Weather", "Climate", "Settings"][sidebarMenu.currentIndex] || ""
+            text: ["Home", "Navigation", "Media", "Phone", "Weather", "Climate", "Settings", "Seat"][sidebarMenu.currentIndex] || ""
             color: colorTextPrimary
             font.pixelSize: 16
             font.bold: true

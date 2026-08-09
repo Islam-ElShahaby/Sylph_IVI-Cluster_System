@@ -1,0 +1,15 @@
+[Unit]
+Description=Sylph offline geocoding (Photon)
+
+[Service]
+Environment=PHOTON_DIR=%h/.cache/sylph-offline-build/photon
+WorkingDirectory=%h/.cache/sylph-offline-build/photon
+ExecStart=/usr/bin/java -jar ${PHOTON_DIR}/photon.jar \
+    -data-dir ${PHOTON_DIR} \
+    -listen-ip 127.0.0.1 \
+    -listen-port 2322
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

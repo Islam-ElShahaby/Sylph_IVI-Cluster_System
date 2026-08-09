@@ -14,7 +14,10 @@ Item {
     property color colorSurface: typeof mainRoot !== "undefined" ? mainRoot.colorSurface : "#c80e0a17"
 
     // Layout metrics
-    property real itemHeight: 52
+    // Rows shrink to fit once the tab count outgrows the sidebar; 52 is the cap.
+    // At 7 tabs this still returns 52; 8 tabs at 52 would overflow a 600px window.
+    property real itemHeight: Math.min(52, (height - menuPadding * 2
+                                            - (menuModel.count - 1) * itemSpacing) / menuModel.count)
     property real itemSpacing: 8 // Fixed spacing to group them together
     property real menuPadding: 24 // Padding around the menu block for the background
     property real totalMenuHeight: (menuModel.count * itemHeight) + (Math.max(0, menuModel.count - 1) * itemSpacing) + (menuPadding * 2)
@@ -55,6 +58,12 @@ Item {
             name: "Settings"
             iconTxt: ""
             iconSource: "qrc:/Assets/tab_icons/settings.svg"
+        }
+        ListElement {
+            name: "Seat"
+            iconTxt: ""
+            // Reuses the Climate heated-seat glyph -- no new asset needed.
+            iconSource: "qrc:/Assets/Climate/heatedSeat-level0.svg"
         }
     }
 

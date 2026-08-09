@@ -1,0 +1,19 @@
+[Unit]
+Description=Sylph offline routing (OSRM)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Environment=OSRM_DIR=%h/.cache/sylph-offline-build/osrm
+Environment=REGION=egypt
+ExecStart=/usr/bin/docker run --rm --name sylph-osrm \
+    -p 127.0.0.1:5000:5000 \
+    -v ${OSRM_DIR}:/data \
+    ghcr.io/project-osrm/osrm-backend \
+    osrm-routed --algorithm mld /data/${REGION}.osrm
+ExecStop=/usr/bin/docker stop sylph-osrm
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

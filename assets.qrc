@@ -49,6 +49,8 @@
         <file>Assets/Climate/heatedSeat-level1.svg</file>
         <file>Assets/Climate/heatedSeat-level2.svg</file>
         <file>Assets/Climate/heatedSeat-level3.svg</file>
+        <file>Assets/Seat/seatBase.svg</file>
+        <file>Assets/Seat/seatBackrest.svg</file>
         <file>Assets/vehicle_door_states/doors_closed.png</file>
         <file>Assets/vehicle_door_states/doors_fl.png</file>
         <file>Assets/vehicle_door_states/doors_fr.png</file>
