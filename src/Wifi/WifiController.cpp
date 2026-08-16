@@ -2,6 +2,9 @@
 
 #include <QProcess>
 #include <QStandardPaths>
+#include <QTimer>
+
+#include "WifiGateway.h"
 
 WifiNetworksModel::WifiNetworksModel(QObject *parent)
     : QAbstractListModel(parent)
@@ -67,6 +70,16 @@ WifiController::WifiController(QObject *parent)
     : QObject(parent)
     , m_model(new WifiNetworksModel(this))
 {
+    // Hypervisor guest: QNX owns bcm0 and runs the only wpa_supplicant, so there
+    // is no local radio and no nmcli. SYLPH_WIFI_GW_HOST points at the host's
+    // wifi_gw on the private vp1 link (same env-var convention as SYLPH_CAN_HOST).
+    // Unset on the RPi3 -> m_gw stays null and everything below uses nmcli as before.
+    const QString gwHost = qEnvironmentVariable("SYLPH_WIFI_GW_HOST");
+    if (!gwHost.isEmpty()) {
+        const int gwPort = qEnvironmentVariableIntValue("SYLPH_WIFI_GW_PORT");
+        m_gw = new WifiGateway(gwHost, static_cast<quint16>(gwPort > 0 ? gwPort : 5556));
+    }
+
     updateAvailable();
     updateRadioState();
     if (m_available && m_enabled) {
@@ -82,7 +95,7 @@ void WifiController::refresh()
     if (!m_available) {
         m_model->clear();
         setConnectedSsid("");
-        setLastError("Wi-Fi control unavailable (nmcli not found).");
+        setLastError(unavailableMessage());
         return;
     }
 
@@ -94,6 +107,11 @@ void WifiController::refresh()
     }
 
     if (m_scanning) return;   // a scan is already in flight
+
+    if (m_gw) {
+        gatewayRefresh();
+        return;
+    }
 
     // Run the rescan ASYNCHRONOUSLY. nmcli's "--rescan yes" can take several
     // seconds; doing it with a blocking waitForFinished() froze the GUI thread
@@ -131,13 +149,31 @@ void WifiController::connectToNetwork(const QString &ssid, const QString &passwo
     updateAvailable();
 
     if (!m_available) {
-        setLastError("Wi-Fi control unavailable (nmcli not found).");
+        setLastError(unavailableMessage());
         return;
     }
 
     const QString trimmed = ssid.trimmed();
     if (trimmed.isEmpty()) {
         setLastError("Select a Wi-Fi network.");
+        return;
+    }
+
+    if (m_gw) {
+        // NOT trimmed(): the gateway takes the passphrase verbatim, and a leading
+        // or trailing space is a legal part of a WPA passphrase. The nmcli path
+        // below trims it, which is a pre-existing quirk left alone here.
+        QString err;
+        if (!m_gw->connectToNetwork(trimmed, password, &err)) {
+            setLastError(err.isEmpty() ? QStringLiteral("Failed to connect to the selected network.")
+                                       : err);
+            return;
+        }
+        setLastError("");
+        // Association takes a moment; refresh once now for responsiveness and
+        // again after the handshake so connectedSsid actually reflects it.
+        refresh();
+        QTimer::singleShot(4000, this, [this]() { refresh(); });
         return;
     }
 
@@ -162,7 +198,17 @@ void WifiController::disconnect()
     updateAvailable();
 
     if (!m_available) {
-        setLastError("Wi-Fi control unavailable (nmcli not found).");
+        setLastError(unavailableMessage());
+        return;
+    }
+
+    if (m_gw) {
+        if (!m_gw->disconnectNetwork()) {
+            setLastError("Failed to disconnect Wi-Fi.");
+            return;
+        }
+        setLastError("");
+        refresh();
         return;
     }
 
@@ -188,11 +234,28 @@ void WifiController::setEnabled(bool enabled)
     updateAvailable();
 
     if (!m_available) {
-        setLastError("Wi-Fi control unavailable (nmcli not found).");
+        setLastError(unavailableMessage());
         return;
     }
 
     if (m_enabled == enabled) return;
+
+    if (m_gw) {
+        if (!m_gw->setRadio(enabled)) {
+            setLastError("Failed to toggle Wi-Fi.");
+            updateRadioState();
+            return;
+        }
+        setLastError("");
+        updateRadioState();
+        if (m_enabled) {
+            refresh();
+        } else {
+            m_model->clear();
+            setConnectedSsid("");
+        }
+        return;
+    }
 
     bool ok = false;
     runNmcli({"radio", "wifi", enabled ? "on" : "off"}, 8000, &ok);
@@ -211,6 +274,40 @@ void WifiController::setEnabled(bool enabled)
         m_model->clear();
         setConnectedSsid("");
     }
+}
+
+QString WifiController::unavailableMessage() const
+{
+    return m_gw ? QStringLiteral("Wi-Fi control unavailable (no reply from the QNX host).")
+                : QStringLiteral("Wi-Fi control unavailable (nmcli not found).");
+}
+
+// Gateway equivalent of the async nmcli rescan. No QProcess and no thread: unlike
+// "nmcli --rescan yes", which blocks until the sweep finishes, "wpa_cli scan"
+// returns as soon as the scan is STARTED and "scan_results" reads a cache - both
+// are sub-100ms. Only the wait for fresh results needs to be asynchronous, and a
+// timer covers that without putting a blocking call on the GUI thread (which is
+// what froze the app in the nmcli path).
+void WifiController::gatewayRefresh()
+{
+    setScanning(true);
+    setLastError("");
+
+    // Show cached results immediately so the pane is never empty while scanning.
+    setConnectedSsid(m_gw->connectedSsid());
+    m_model->setNetworks(m_gw->scanResults(m_connectedSsid));
+
+    if (!m_gw->scan()) {
+        setScanning(false);
+        setLastError("Failed to scan for Wi-Fi networks.");
+        return;
+    }
+
+    QTimer::singleShot(2500, this, [this]() {
+        setConnectedSsid(m_gw->connectedSsid());
+        m_model->setNetworks(m_gw->scanResults(m_connectedSsid));
+        setScanning(false);
+    });
 }
 
 void WifiController::setScanning(bool scanning)
@@ -238,6 +335,15 @@ void WifiController::updateRadioState()
 {
     if (!m_available) return;
 
+    if (m_gw) {
+        const bool up = m_gw->radioUp();
+        if (m_enabled != up) {
+            m_enabled = up;
+            emit enabledChanged();
+        }
+        return;
+    }
+
     bool ok = false;
     const QString output = runNmcli({"-t", "-f", "WIFI", "g"}, 4000, &ok);
     if (!ok) return;
@@ -252,7 +358,10 @@ void WifiController::updateRadioState()
 
 void WifiController::updateAvailable()
 {
-    const bool available = !QStandardPaths::findExecutable("nmcli").isEmpty();
+    // On the guest there is no nmcli at all; availability means the QNX gateway
+    // answers. Probing it is a sub-ms round trip over the private link.
+    const bool available = m_gw ? m_gw->available()
+                                : !QStandardPaths::findExecutable("nmcli").isEmpty();
     if (m_available == available) return;
     m_available = available;
     emit availableChanged();

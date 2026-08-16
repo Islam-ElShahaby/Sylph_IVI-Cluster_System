@@ -1,10 +1,14 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Sylph.Settings 1.0
 
 // Date & Time settings: live preview, display format (24h / seconds), and two
-// independent manual overrides -- the time zone (GMT offset) and the device time.
-// All app-level (display only), persisted via QtCore Settings in Main.qml.
+// independent overrides -- the time zone and the device time.
+// The device-time override is display-only, persisted via QtCore Settings in
+// Main.qml. The TIME ZONE is not: picking one also repoints /etc/localtime through
+// TimeZoneController, so logs, chrony and anything else on the guest agree with
+// what the dash shows, and it survives a reboot.
 Item {
     id: root
 
@@ -21,7 +25,7 @@ Item {
     property bool showSeconds: typeof mainRoot !== "undefined" ? mainRoot.clockShowSeconds : false
     property bool timeAuto:    typeof mainRoot !== "undefined" ? mainRoot.clockTimeAuto : true
     property bool zoneAuto:    typeof mainRoot !== "undefined" ? mainRoot.clockZoneAuto : true
-    property int  offsetMin:   typeof mainRoot !== "undefined" ? mainRoot.clockManualOffsetMin : 0
+    property string zoneId:    typeof mainRoot !== "undefined" ? mainRoot.clockZoneId : ""
 
     // Ticking clock for the live preview (honors the overrides)
     property var now: effDate()
@@ -48,9 +52,17 @@ Item {
         mainRoot.clockManualDeltaMs += ms
         root.now = effDate()
     }
-    function setOffset(min) {
-        if (typeof mainRoot === "undefined") return
-        mainRoot.clockManualOffsetMin = Math.max(-720, Math.min(840, min))
+    // Picking a zone does two things: repoint the SYSTEM zone (persists, and every
+    // other process on the guest follows), and record the id so this app renders it
+    // without waiting for a restart. If the system write fails - /etc read-only, or
+    // no tzdata for that id - the display is left alone rather than lying about it.
+    function applyZone(id) {
+        if (typeof mainRoot === "undefined" || id === "") return
+        if (!TimeZoneController.setZone(id)) {
+            console.warn("[Time] could not set system zone to", id)
+            return
+        }
+        mainRoot.clockZoneId = id
         root.now = effDate()
     }
     function setTimeAuto(auto) {
@@ -62,8 +74,8 @@ Item {
     function setZoneAuto(auto) {
         if (typeof mainRoot === "undefined") return
         mainRoot.clockZoneAuto = auto
-        if (!auto)   // manual zone starts from the current system offset
-            mainRoot.clockManualOffsetMin = -(new Date().getTimezoneOffset())
+        if (!auto && mainRoot.clockZoneId === "")   // seed the picker from the system zone
+            mainRoot.clockZoneId = TimeZoneController.zoneId
         root.now = effDate()
     }
 
@@ -106,6 +118,59 @@ Item {
         Behavior on color { ColorAnimation { duration: 120 } }
         Text { anchors.centerIn: parent; text: glyph; color: colorTextPrimary; font.pixelSize: 20; font.bold: true }
         MouseArea { id: sbMa; anchors.fill: parent; onClicked: parent.clicked() }
+    }
+
+    // -- Labelled dropdown row --
+    // Two of these (Region, then City) beat one flat list: tzdata carries ~600 zone
+    // ids, which is not a scrollable list anyone can use on a touchscreen.
+    component PickerRow: Rectangle {
+        id: prow
+        property string label: ""
+        property var options: []
+        property string current: ""
+        signal picked(string value)
+        Layout.fillWidth: true
+        Layout.preferredHeight: 60
+        radius: radiusSmall
+        color: colorSurfaceInset
+        border.color: colorStroke
+        border.width: 1
+
+        RowLayout {
+            anchors.fill: parent
+            anchors.margins: 14
+            spacing: 12
+            Text { text: prow.label; color: colorTextPrimary; font.pixelSize: 14; font.bold: true }
+            Item { Layout.fillWidth: true }
+            ComboBox {
+                id: combo
+                model: prow.options
+                Layout.preferredWidth: 210
+                Layout.preferredHeight: 40
+                font.pixelSize: 14
+                // Assigning `model` resets currentIndex, so re-seat the selection
+                // whenever either side changes or the box snaps back to entry 0.
+                currentIndex: Math.max(0, prow.options.indexOf(prow.current))
+                onModelChanged: currentIndex = Math.max(0, prow.options.indexOf(prow.current))
+                onActivated: prow.picked(prow.options[currentIndex])
+
+                contentItem: Text {
+                    leftPadding: 10
+                    rightPadding: 28
+                    text: combo.displayText
+                    color: colorAccent
+                    font: combo.font
+                    elide: Text.ElideRight
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    radius: 10
+                    color: colorSurfaceAlt
+                    border.color: colorStroke
+                    border.width: 1
+                }
+            }
+        }
     }
 
     // -- Labelled stepper row --
@@ -186,7 +251,9 @@ Item {
                     }
                     Text {
                         Layout.alignment: Qt.AlignHCenter
-                        text: "Time zone  ·  " + root.offLabel(root.effOffMin())
+                        text: (root.zoneAuto || root.zoneId === ""
+                               ? TimeZoneController.zoneId
+                               : root.zoneId) + "  ·  " + root.offLabel(root.effOffMin())
                         color: colorTextSubtle
                         font.pixelSize: 12
                     }
@@ -200,12 +267,29 @@ Item {
                 on: root.zoneAuto
                 onToggled: (c) => root.setZoneAuto(c)
             }
-            Stepper {
+            PickerRow {
+                id: regionPicker
                 visible: !root.zoneAuto
-                label: "GMT Offset"
-                valueText: root.offLabel(root.offsetMin)
-                onDec: root.setOffset(root.offsetMin - 30)
-                onInc: root.setOffset(root.offsetMin + 30)
+                label: "Region"
+                options: TimeZoneController.regions()
+                current: TimeZoneController.regionOf(root.zoneId)
+                // Region alone is not a zone; jump to the first city in it so the
+                // selection is always a valid id rather than a half-picked state.
+                onPicked: (r) => {
+                    var cities = TimeZoneController.citiesIn(r)
+                    if (cities.length > 0)
+                        root.applyZone(r === "Other" ? cities[0] : r + "/" + cities[0])
+                }
+            }
+            PickerRow {
+                visible: !root.zoneAuto
+                label: "City"
+                options: TimeZoneController.citiesIn(regionPicker.current)
+                current: TimeZoneController.cityOf(root.zoneId)
+                onPicked: (c) => {
+                    var r = regionPicker.current
+                    root.applyZone(r === "Other" ? c : r + "/" + c)
+                }
             }
 
             // ============ TIME ============

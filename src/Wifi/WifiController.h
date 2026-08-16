@@ -14,6 +14,8 @@ struct WifiNetwork {
     bool inUse = false;
 };
 
+class WifiGateway;
+
 class WifiNetworksModel : public QAbstractListModel
 {
     Q_OBJECT
@@ -82,6 +84,14 @@ private:
     QString runNmcli(const QStringList &args, int timeoutMs, bool *ok = nullptr) const;
     QString findWifiDevice() const;
     static QStringList splitTerseLine(const QString &line);
+
+    // Gateway backend, used on the hypervisor guest where QNX owns the radio.
+    // Null on the RPi3, which owns its own and keeps the nmcli path. Every method
+    // below branches on this; nothing about the nmcli behaviour changes.
+    void gatewayRefresh();
+    QString unavailableMessage() const;
+
+    WifiGateway *m_gw = nullptr;
 
     WifiNetworksModel *m_model;
     bool m_enabled = false;

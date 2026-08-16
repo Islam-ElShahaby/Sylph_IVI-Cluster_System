@@ -72,6 +72,8 @@ qt_add_qml_module(appSylph
         src/Phone/PhoneController.cpp
         src/Wifi/WifiController.h
         src/Wifi/WifiController.cpp
+        src/Wifi/WifiGateway.h
+        src/Wifi/WifiGateway.cpp
         src/LocalMedia/LocalMediaController.h
         src/LocalMedia/LocalMediaController.cpp
         src/Core/AudioFocusManager.h
@@ -86,6 +88,8 @@ qt_add_qml_module(appSylph
         src/Core/DoorUartReader.cpp
         src/Settings/AudioSettingsController.h
         src/Settings/AudioSettingsController.cpp
+        src/Settings/TimeZoneController.h
+        src/Settings/TimeZoneController.cpp
         src/Weather/AtmosBackend.h
         src/Weather/AtmosBackend.cpp
         src/Can/CanController.h

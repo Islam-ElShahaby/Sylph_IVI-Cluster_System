@@ -10,6 +10,7 @@
 #include "Navigation/BluetoothGpsController.h"
 #include "Core/AppConfig.h"
 #include "Settings/AudioSettingsController.h"
+#include "Settings/TimeZoneController.h"
 #include "Weather/AtmosBackend.h"
 #include "Core/VehicleController.h"
 #include "Core/DoorUartReader.h"
@@ -42,7 +43,7 @@ int main(int argc, char *argv[])
     new DoorUartReader(vehicleController, QStringLiteral("/dev/ttyAMA0"), 115200, &app);
     const int canPort = qEnvironmentVariableIntValue("SYLPH_CAN_PORT");
     CanController *canController = new CanController(
-        qEnvironmentVariable("SYLPH_CAN_HOST", QStringLiteral("10.42.0.65")),
+        qEnvironmentVariable("SYLPH_CAN_HOST", QStringLiteral("192.168.100.1")),
         static_cast<quint16>(canPort > 0 ? canPort : 5555),
         &app);
 
@@ -56,6 +57,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Sylph.Core", 1, 0, "BtGpsController", gpsController);
     qmlRegisterSingletonInstance("Sylph.Core", 1, 0, "AppConfig", appConfig);
     qmlRegisterSingletonInstance("Sylph.Settings", 1, 0, "AudioSettingsController", audioSettingsController);
+    qmlRegisterSingletonInstance("Sylph.Settings", 1, 0, "TimeZoneController", new TimeZoneController(&app));
     qmlRegisterSingletonInstance("Sylph.Weather", 1, 0, "WeatherController", weatherController);
     qmlRegisterSingletonInstance("Sylph.Core",    1, 0, "VehicleController", vehicleController);
     qmlRegisterSingletonInstance("Sylph.Can",     1, 0, "CanController", canController);

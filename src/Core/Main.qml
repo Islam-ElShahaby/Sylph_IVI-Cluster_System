@@ -11,6 +11,7 @@ import Sylph.Wifi 1.0
 import Sylph.LocalMedia 1.0
 import Sylph.Core 1.0
 import Sylph.Weather 1.0
+import Sylph.Settings 1.0
 import Sylph.Can 1.0
 
 ApplicationWindow {
@@ -64,15 +65,15 @@ ApplicationWindow {
         property bool use24Hour: true
         property bool showSeconds: false
         property bool timeAuto: true         // false = manual device time (delta)
-        property bool zoneAuto: true         // false = manual GMT offset
-        property int  manualOffsetMin: 0      // GMT offset (minutes) when zone is manual
+        property bool zoneAuto: true         // false = the zone picked below
+        property string zoneId: ""            // IANA id ("Africa/Cairo") when zone is manual
         property real manualDeltaMs: 0        // shift from the real clock when time is manual
     }
     property alias clockUse24Hour:       clockPrefs.use24Hour
     property alias clockShowSeconds:     clockPrefs.showSeconds
     property alias clockTimeAuto:        clockPrefs.timeAuto
     property alias clockZoneAuto:        clockPrefs.zoneAuto
-    property alias clockManualOffsetMin: clockPrefs.manualOffsetMin
+    property alias clockZoneId:          clockPrefs.zoneId
     property alias clockManualDeltaMs:   clockPrefs.manualDeltaMs
 
     // Effective "now" honoring the time and zone overrides independently (display
@@ -81,11 +82,17 @@ ApplicationWindow {
     function effectiveDate() {
         var localOffMs  = -(new Date().getTimezoneOffset()) * 60000
         var deltaMs     = clockTimeAuto ? 0 : clockManualDeltaMs
-        var targetOffMs = clockZoneAuto ? localOffMs : clockManualOffsetMin * 60000
+        var targetOffMs = effectiveOffsetMin() * 60000
         return new Date(Date.now() + deltaMs + targetOffMs - localOffMs)
     }
+    // Asks the controller for the picked zone's offset every call rather than
+    // caching it, so a DST transition is honored without restarting the app. The
+    // JS engine caches its own local-time offset for the process lifetime, which is
+    // why a manual zone is rendered from this offset instead of from new Date().
     function effectiveOffsetMin() {
-        return clockZoneAuto ? -(new Date().getTimezoneOffset()) : clockManualOffsetMin
+        if (clockZoneAuto || clockZoneId === "")
+            return -(new Date().getTimezoneOffset())
+        return TimeZoneController.offsetMinutes(clockZoneId)
     }
 
     function clamp(value, minValue, maxValue) {
@@ -389,28 +396,39 @@ ApplicationWindow {
         }
     }
 
-    // -- CAN telemetry: fan speed + seat tilt, 50 ms heartbeat and on change ----
+    // -- CAN telemetry: fan speed + seat tilt, each cyclic at 100 ms -----------
     // Both cards stay instantiated while hidden, so this tracks them regardless
     // of which page is showing. sendFrame() is a no-op while the link is down.
+    //
+    // One 50 ms tick alternates the two IDs, so each goes out every 100 ms and
+    // they sit 50 ms apart instead of back-to-back -- the node gets an even
+    // arrival rate rather than a burst every cycle.
     // ponytail: IDs are placeholders -- swap for the real ones from the DBC.
     Item {
         id: canTelemetry
-        readonly property int fanSpeed: climateCard.fanSpeed   // 0-6
-        readonly property int seatTilt: seatCard.tilt          // 0-45 degrees
+        readonly property int fanSpeed: climateCard.fanSpeed         // 0-6
+        readonly property int driverTilt: seatCard.driverTilt        // 0-45 degrees
+        readonly property int passengerTilt: seatCard.passengerTilt  // 0-45 degrees
 
-        function transmit() {
-            CanController.sendFrame(0x310, [fanSpeed])
-            CanController.sendFrame(0x311, [seatTilt])
-        }
+        function sendFan()  { CanController.sendFrame(0x310, [fanSpeed]) }
+        function sendSeat() { CanController.sendFrame(0x311, [driverTilt, passengerTilt]) }
 
-        onFanSpeedChanged: transmit()
-        onSeatTiltChanged: transmit()
+        // On change, send only the ID that changed -- sending both would put
+        // them back in phase for that cycle.
+        onFanSpeedChanged: sendFan()
+        onDriverTiltChanged: sendSeat()
+        onPassengerTiltChanged: sendSeat()
 
+        property bool fanTurn: true
         Timer {
             interval: 50
             repeat: true
             running: true
-            onTriggered: canTelemetry.transmit()
+            onTriggered: {
+                if (canTelemetry.fanTurn) canTelemetry.sendFan()
+                else                      canTelemetry.sendSeat()
+                canTelemetry.fanTurn = !canTelemetry.fanTurn
+            }
         }
     }
 

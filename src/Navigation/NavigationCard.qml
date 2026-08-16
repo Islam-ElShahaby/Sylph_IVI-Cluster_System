@@ -286,7 +286,7 @@ Item {
     // between the online and offline basemap never tears the map down mid-drive.
     function applyBaseStyle(styleObj) {
         baseStyleObj = styleObj;
-        inject3DBuildings(baseStyleObj);
+        hideBuildingLayers(baseStyleObj);
         if (currentRouteGeometry) {
             injectRouteLayer(currentRouteGeometry);
         } else {
@@ -355,84 +355,17 @@ Item {
         xhr.send();
     }
 
-    function inject3DBuildings(styleObj) {
-        // Hide existing 2D building layers to prevent overlap with our 3D extrusions,
-        // and scavenge the source they came from on the way past. Protomaps calls it
-        // protomaps/buildings, Mapbox calls it composite/building -- one pass covers both.
-        var sourceId = "composite";
-        var sourceLayer = "building";
-        var found = false;
+    // Buildings are hidden entirely -- the map shows streets, water and empty blocks.
+    // Protomaps calls the layers protomaps/buildings, Mapbox calls them
+    // composite/building -- matching on the id substring covers both.
+    function hideBuildingLayers(styleObj) {
         for (var i = 0; i < styleObj.layers.length; i++) {
             var L = styleObj.layers[i];
             if (L.id.indexOf("building") === -1)
                 continue;
-            if (!found && L.type === "fill" && L.source) {
-                sourceId = L.source;
-                sourceLayer = L["source-layer"] || sourceLayer;
-                found = true;
-            }
             L.layout = L.layout || {};
             L.layout.visibility = "none";
         }
-
-        // Global directional lighting for realistic wall/roof shading
-        styleObj.light = {
-            "anchor": "map",
-            "color": root.isNightMode ? "#c6d2e6" : "#ffffff",
-            "intensity": root.isNightMode ? 0.45 : 0.6,
-            "position": [1.15, 210, 30]
-        };
-
-        // Last resort if no building layer was found above: any vector source.
-        if (!found && !styleObj.sources[sourceId]) {
-            var keys = Object.keys(styleObj.sources);
-            for (var k = 0; k < keys.length; k++) {
-                if (styleObj.sources[keys[k]].type === "vector") {
-                    sourceId = keys[k];
-                    break;
-                }
-            }
-        }
-
-        var buildingLayer = {
-            "id": "3d-buildings-extrusion",
-            "source": sourceId,
-            "source-layer": sourceLayer,
-            "type": "fill-extrusion",
-            "minzoom": 13,
-            "paint": {
-                "fill-extrusion-color": root.isNightMode ? "#5a6b8c" : "#d0d4df",
-                // OSM height data in MENA regions is often drastically underreported (3-5m for
-                // 6-story buildings). Scale reported values by 3x and enforce a 15m floor.
-                // Buildings with no data at all default to 22m (typical 7-story block).
-                "fill-extrusion-height": ["max", ["*", ["coalesce", ["get", "height"], ["get", "render_height"], 22.0], 3.0], 15.0],
-                "fill-extrusion-base": ["coalesce", ["get", "min_height"], ["get", "render_min_height"], 0.0],
-                "fill-extrusion-opacity": root.isNightMode ? 0.9 : 0.85,
-                "fill-extrusion-vertical-gradient": true
-            }
-        };
-
-        // Inject below text labels so street names float over the buildings,
-        // but ABOVE all road lines, casings, and route lines.
-        // We search backwards from the end of the layers list to find the last non-symbol
-        // layer (e.g. roads, casings, route lines, water) and insert our 3D buildings right after it.
-        var insertIndex = 0;
-        for (var j = styleObj.layers.length - 1; j >= 0; j--) {
-            if (styleObj.layers[j].type !== "symbol" && styleObj.layers[j].type !== "fill-extrusion") {
-                insertIndex = j + 1;
-                break;
-            }
-        }
-        if (insertIndex === 0) {
-            // Fallback: search forwards for first symbol
-            for (var k = 0; k < styleObj.layers.length; k++) {
-                if (styleObj.layers[k].type === "symbol") {
-                    insertIndex = k;
-                    break;
-                }
-            }
-        }
-        styleObj.layers.splice(insertIndex, 0, buildingLayer);
     }
 
     function injectRouteLayer(geometry) {
@@ -488,10 +421,7 @@ Item {
 
         var insertIndex = styleCopy.layers.length;
         for (var i = 0; i < styleCopy.layers.length; i++) {
-            if (styleCopy.layers[i].id === "3d-buildings-extrusion") {
-                insertIndex = i;
-                break;
-            } else if (styleCopy.layers[i].type === "symbol" && styleCopy.layers[i].id.indexOf("label") !== -1) {
+            if (styleCopy.layers[i].type === "symbol" && styleCopy.layers[i].id.indexOf("label") !== -1) {
                 insertIndex = i;
                 break;
             }
